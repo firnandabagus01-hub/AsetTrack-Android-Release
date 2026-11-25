@@ -3,6 +3,18 @@ name: Publish Android update to website
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag release yang akan dipublikasikan, contoh v1.3"
+        required: true
+        default: "v1.3"
+        type: string
+      version_code:
+        description: "Android versionCode untuk release tersebut"
+        required: true
+        default: "4"
+        type: string
 
 permissions:
   contents: read
@@ -17,20 +29,33 @@ jobs:
           WEBSITE_DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
         with:
           script: |
-            const release = context.payload.release;
-            const tag = release.tag_name;
+            const owner = "firnandabagus01-hub";
+            const repo = "AsetTrack-Android-Release";
+            let release = context.payload.release;
+            let versionCode;
 
-            // Version code for each Android release tag.
-            const versionCodes = { "v1.3": 4 };
-            const versionCode = versionCodes[tag];
-            if (!versionCode) {
-              core.setFailed(`Version Code untuk tag ${tag} belum didaftarkan di workflow.`);
+            if (release) {
+              const versionCodes = { "v1.3": 4 };
+              versionCode = versionCodes[release.tag_name];
+            } else {
+              const tag = core.getInput("tag");
+              versionCode = Number(core.getInput("version_code"));
+              const result = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              release = result.data;
+            }
+
+            if (!release || !Number.isInteger(versionCode) || versionCode < 1) {
+              core.setFailed("Release atau versionCode tidak valid.");
               return;
             }
 
-            const apk = release.assets.find(asset => asset.name === "PALAPA_TOSERBA_v1.3.apk");
+            const tag = release.tag_name;
+            const versionName = tag.replace(/^v/, "");
+            const expectedAssetName = `PALAPA_TOSERBA_v${versionName}.apk`;
+            const apk = release.assets.find(asset => asset.name === expectedAssetName);
+
             if (!apk) {
-              core.setFailed("APK PALAPA_TOSERBA_v1.3.apk tidak ditemukan pada release.");
+              core.setFailed(`APK ${expectedAssetName} tidak ditemukan pada release ${tag}.`);
               return;
             }
 
@@ -57,7 +82,7 @@ jobs:
                   event_type: "android_release_published",
                   client_payload: {
                     versionCode,
-                    versionName: tag.replace(/^v/, ""),
+                    versionName,
                     apkUrl: apk.browser_download_url,
                     sha256,
                     releaseNotes: release.body || `AsetTrack Android ${tag}`
