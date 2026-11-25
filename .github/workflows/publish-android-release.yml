@@ -1,0 +1,76 @@
+name: Publish Android update to website
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calculate APK checksum and notify website
+        uses: actions/github-script@v7
+        env:
+          WEBSITE_DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        with:
+          script: |
+            const release = context.payload.release;
+            const tag = release.tag_name;
+
+            // Version code for each Android release tag.
+            const versionCodes = { "v1.3": 4 };
+            const versionCode = versionCodes[tag];
+            if (!versionCode) {
+              core.setFailed(`Version Code untuk tag ${tag} belum didaftarkan di workflow.`);
+              return;
+            }
+
+            const apk = release.assets.find(asset => asset.name === "PALAPA_TOSERBA_v1.3.apk");
+            if (!apk) {
+              core.setFailed("APK PALAPA_TOSERBA_v1.3.apk tidak ditemukan pada release.");
+              return;
+            }
+
+            const apkResponse = await fetch(apk.browser_download_url);
+            if (!apkResponse.ok) {
+              core.setFailed(`Gagal mengunduh APK: HTTP ${apkResponse.status}`);
+              return;
+            }
+
+            const apkBytes = Buffer.from(await apkResponse.arrayBuffer());
+            const sha256 = require("crypto").createHash("sha256").update(apkBytes).digest("hex");
+
+            const dispatchResponse = await fetch(
+              "https://api.github.com/repos/firnandabagus01-hub/AsetTrack-Web/dispatches",
+              {
+                method: "POST",
+                headers: {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": `Bearer ${process.env.WEBSITE_DISPATCH_TOKEN}`,
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                  event_type: "android_release_published",
+                  client_payload: {
+                    versionCode,
+                    versionName: tag.replace(/^v/, ""),
+                    apkUrl: apk.browser_download_url,
+                    sha256,
+                    releaseNotes: release.body || `AsetTrack Android ${tag}`
+                  }
+                })
+              }
+            );
+
+            if (!dispatchResponse.ok) {
+              const details = await dispatchResponse.text();
+              core.setFailed(`Gagal mengirim pembaruan ke website: HTTP ${dispatchResponse.status} - ${details}`);
+              return;
+            }
+
+            core.info(`Website diberi tahu tentang AsetTrack ${tag} (versionCode ${versionCode}).`);
+            core.info(`APK SHA-256: ${sha256}`);
