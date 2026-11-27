@@ -75,7 +75,7 @@ jobs:
               "aapt"
             );
             const badging = execFileSync(aapt, ["dump", "badging", apkPath], { encoding: "utf8" });
-            const versionMatch = badging.match(/^package:.*versionCode='(\\d+)'.*versionName='([^']+)'/m);
+            const versionMatch = badging.match(/^package:.*versionCode='(\d+)'.*versionName='([^']+)'/m);
 
             if (!versionMatch) {
               throw new Error("Tidak dapat membaca versionCode/versionName dari APK.");
