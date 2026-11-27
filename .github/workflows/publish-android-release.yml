@@ -52,11 +52,14 @@ jobs:
             }
 
             const tag = release.tag_name;
+            const tagVersion = tag.replace(/^v/i, "");
             const expectedAssetName = `PALAPA_TOSERBA_${tag.replace(/^v/i, "v")}.apk`;
-            const apk = release.assets.find(asset => asset.name === expectedAssetName);
+            const legacyAssetName = tagVersion === "1.6" ? "PALAPA_TOSERBA_PRODUCTION.apk" : null;
+            const apk = release.assets.find(asset => asset.name === expectedAssetName)
+              || (legacyAssetName ? release.assets.find(asset => asset.name === legacyAssetName) : null);
 
             if (!apk) {
-              throw new Error(`APK ${expectedAssetName} tidak ditemukan pada release ${tag}.`);
+              throw new Error(`APK ${expectedAssetName}${legacyAssetName ? " atau " + legacyAssetName : ""} tidak ditemukan pada release ${tag}.`);
             }
 
             const apkResponse = await fetch(apk.browser_download_url);
