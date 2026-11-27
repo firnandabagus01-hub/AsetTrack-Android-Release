@@ -86,7 +86,6 @@ jobs:
 
             const versionCode = Number(versionMatch[1]);
             const versionName = versionMatch[2];
-            const tagVersion = tag.replace(/^v/i, "");
 
             if (!Number.isInteger(versionCode) || versionCode < 1 || versionName !== tagVersion) {
               throw new Error(
