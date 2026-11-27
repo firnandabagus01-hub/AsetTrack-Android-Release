@@ -6,14 +6,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag release yang akan dipublikasikan, contoh v1.3"
+        description: "Tag release yang akan dipublikasikan, contoh v1.5"
         required: true
-        default: "v1.4"
-        type: string
-      version_code:
-        description: "Android versionCode untuk release tersebut"
-        required: true
-        default: "5"
         type: string
 
 permissions:
@@ -23,52 +17,86 @@ jobs:
   publish-update:
     runs-on: ubuntu-latest
     steps:
-      - name: Calculate APK checksum and notify website
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: sdkmanager "build-tools;35.0.0"
+
+      - name: Calculate APK metadata and notify website
         uses: actions/github-script@v7
         env:
           WEBSITE_DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_VERSION_CODE: ${{ inputs.version_code }}
         with:
           script: |
+            const fs = require("fs");
+            const os = require("os");
+            const path = require("path");
+            const { execFileSync } = require("child_process");
+            const crypto = require("crypto");
+
             const owner = "firnandabagus01-hub";
             const repo = "AsetTrack-Android-Release";
             let release = context.payload.release;
-            let versionCode;
 
-            if (release) {
-              const versionCodes = { "v1.3": 4, "v1.4": 5 };
-              versionCode = versionCodes[release.tag_name];
-            } else {
+            if (!release) {
               const tag = process.env.RELEASE_TAG;
-              versionCode = Number(process.env.RELEASE_VERSION_CODE);
+              if (!tag) throw new Error("Tag rilis wajib diisi saat dijalankan manual.");
               const result = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
               release = result.data;
             }
 
-            if (!release || !Number.isInteger(versionCode) || versionCode < 1) {
-              core.setFailed("Release atau versionCode tidak valid.");
-              return;
+            if (!release || release.draft || release.prerelease) {
+              throw new Error("Rilis tidak valid, masih draft, atau prerelease.");
             }
 
             const tag = release.tag_name;
-            const versionName = tag.replace(/^v/, "");
-            const expectedAssetName = `PALAPA_TOSERBA_v${versionName}.apk`;
+            const expectedAssetName = `PALAPA_TOSERBA_${tag.replace(/^v/i, "v")}.apk`;
             const apk = release.assets.find(asset => asset.name === expectedAssetName);
 
             if (!apk) {
-              core.setFailed(`APK ${expectedAssetName} tidak ditemukan pada release ${tag}.`);
-              return;
+              throw new Error(`APK ${expectedAssetName} tidak ditemukan pada release ${tag}.`);
             }
 
             const apkResponse = await fetch(apk.browser_download_url);
             if (!apkResponse.ok) {
-              core.setFailed(`Gagal mengunduh APK: HTTP ${apkResponse.status}`);
-              return;
+              throw new Error(`Gagal mengunduh APK: HTTP ${apkResponse.status}`);
             }
 
             const apkBytes = Buffer.from(await apkResponse.arrayBuffer());
-            const sha256 = require("crypto").createHash("sha256").update(apkBytes).digest("hex");
+            const apkPath = path.join(os.tmpdir(), expectedAssetName);
+            fs.writeFileSync(apkPath, apkBytes);
+
+            const aapt = path.join(
+              process.env.ANDROID_HOME,
+              "build-tools",
+              "35.0.0",
+              "aapt"
+            );
+            const badging = execFileSync(aapt, ["dump", "badging", apkPath], { encoding: "utf8" });
+            const versionMatch = badging.match(/^package:.*versionCode='(\\d+)'.*versionName='([^']+)'/m);
+
+            if (!versionMatch) {
+              throw new Error("Tidak dapat membaca versionCode/versionName dari APK.");
+            }
+
+            const versionCode = Number(versionMatch[1]);
+            const versionName = versionMatch[2];
+            const tagVersion = tag.replace(/^v/i, "");
+
+            if (!Number.isInteger(versionCode) || versionCode < 1 || versionName !== tagVersion) {
+              throw new Error(
+                `Metadata APK tidak cocok dengan tag. Tag=${tagVersion}, APK=${versionName}, versionCode=${versionCode}`
+              );
+            }
+
+            const sha256 = crypto.createHash("sha256").update(apkBytes).digest("hex").toUpperCase();
+            const dispatchToken = process.env.WEBSITE_DISPATCH_TOKEN;
+
+            if (!dispatchToken) {
+              throw new Error("Secret WEBSITE_DISPATCH_TOKEN belum tersedia pada repository rilis Android.");
+            }
 
             const dispatchResponse = await fetch(
               "https://api.github.com/repos/firnandabagus01-hub/AsetTrack-Web/dispatches",
@@ -76,7 +104,7 @@ jobs:
                 method: "POST",
                 headers: {
                   "Accept": "application/vnd.github+json",
-                  "Authorization": `Bearer ${process.env.WEBSITE_DISPATCH_TOKEN}`,
+                  "Authorization": `Bearer ${dispatchToken}`,
                   "X-GitHub-Api-Version": "2022-11-28",
                   "Content-Type": "application/json"
                 },
@@ -95,9 +123,9 @@ jobs:
 
             if (!dispatchResponse.ok) {
               const details = await dispatchResponse.text();
-              core.setFailed(`Gagal mengirim pembaruan ke website: HTTP ${dispatchResponse.status} - ${details}`);
-              return;
+              throw new Error(`Gagal mengirim pembaruan ke website: HTTP ${dispatchResponse.status} - ${details}`);
             }
 
-            core.info(`Website diberi tahu tentang AsetTrack ${tag} (versionCode ${versionCode}).`);
+            core.info(`Website berhasil diberi tahu tentang AsetTrack ${tag}.`);
+            core.info(`versionCode dari APK: ${versionCode}`);
             core.info(`APK SHA-256: ${sha256}`);
